@@ -79,6 +79,7 @@ usage:
     Abc_Print(-2, "usage: lsv_print_nodes [-h]\n");
     Abc_Print(-2, "\t        prints the nodes in the network\n");
     Abc_Print(-2, "\t-h    : print the command usage\n");
+
     return 1;
 }
 
@@ -693,6 +694,119 @@ usage:
     Abc_Print(-2, "usage: lsv_sym_sat <k> <i> <j>\n");
     Abc_Print(-2, "\t          do Symmetry Checking for a given AIG and inputs \n");
     return 1;
+}
+
+    return 1;
+}
+
+using namespace std;
+
+int Lsv_CommandSimBdd(Abc_Frame_t* pAbc, int argc, char** argv) {
+    Abc_Ntk_t* pNtk;
+    Abc_Obj_t *pPo, *pPi;
+    int ithPo, ithPi;
+    int c = 0;
+
+    pNtk = Abc_FrameReadNtk(pAbc);
+    string inputPattern;
+    unordered_map<string, int> piName2Value;
+
+    // ensure Ntk exist
+    if (pNtk == NULL) {
+        Abc_Print(-1, "Empty network.\n");
+        return 1;
+    }
+    if (!Abc_NtkIsBddLogic(pNtk)) {
+        Abc_Print(-1, "Simulating BDDs can only be done for BDD networks (run \"collapse\").\n");
+        return 1;
+    }
+
+    // get input pattern, assume input pattern = order
+    if (argc != 2) goto usage;
+    inputPattern = argv[1];
+
+    // check if valid
+    if (inputPattern.length() != Abc_NtkPiNum(pNtk)) goto usage;
+    Abc_NtkForEachPi(pNtk, pPi, ithPi) {
+        if (inputPattern[ithPi] != '1' && inputPattern[ithPi] != '0') goto usage;
+        string piName = Abc_ObjName(pPi);
+        piName2Value[piName] = inputPattern[ithPi] == '1' ? 1 : 0;
+    }
+
+    Extra_UtilGetoptReset();
+    while ((c = Extra_UtilGetopt(argc, argv, "h")) != EOF) {
+        switch (c) {
+            case 'h':
+                goto usage;
+            default:
+                goto usage;
+        }
+    }
+
+    // 1. To find the BDD node associated with each PO, use the codes below.
+    Abc_NtkForEachPo(pNtk, pPo, ithPo) {
+        Abc_Obj_t* pRoot = Abc_ObjFanin0(pPo);
+        assert(Abc_NtkIsBddLogic(pRoot->pNtk));
+        DdManager* dd = (DdManager*)pRoot->pNtk->pManFunc;
+        DdNode* ddnode = (DdNode*)pRoot->pData;  // origin
+
+        // 2. To find the variable order of the BDD, you may use the following codes to find the variable name array.
+        char** vNamesIn = (char**)Abc_NodeGetFaninNames(pRoot)->pArray;
+        Abc_Obj_t* pFanin;
+        DdNode* g;
+        int j;
+        Abc_ObjForEachFanin(pRoot, pFanin, j) {
+            g = (piName2Value[vNamesIn[j]] == 1) ? Cudd_bddIthVar(dd, j) : (Cudd_Not(Cudd_bddIthVar(dd, j)));
+            ddnode = Cudd_Cofactor(dd, ddnode, g);  // f with respect to g
+        }
+
+        // print result
+        cout << Abc_ObjName(pPo) << ": ";
+        if (ddnode == DD_ONE(dd))
+            cout << "1";
+        else if (ddnode == Cudd_Not(DD_ONE(dd)) || ddnode == DD_ZERO(dd))
+            cout << "0";
+        else
+            assert(0);
+        cout << endl;
+    }
+    return 0;
+
+usage:
+    Abc_Print(-2, "usage: lsv_sim_bdd <input_pattern>\n");
+    Abc_Print(-2, "\t          do simulations for a given BDD and an input pattern\n");
+    return 1;
+}
+
+void simulateAIG32times(Abc_Ntk_t* pNtk, vector<int>& inputPattern) {
+    Abc_Obj_t *pObj, *pPi, *pPo, *pFanin;
+    int ithObj, ithPi, ithPo, ithFanin;
+
+    // assign inputpattern
+    Abc_NtkForEachPi(pNtk, pPi, ithPi) {
+        pPi->iTemp = inputPattern[ithPi];
+    }
+
+    // propogate value
+    Abc_NtkForEachObj(pNtk, pObj, ithObj) {
+        if (pObj->Type != 7) continue;
+        vector<Abc_Obj_t*> fanin;
+        Abc_ObjForEachFanin(pObj, pFanin, ithFanin) {
+            fanin.emplace_back(pFanin);
+        }
+        pObj->iTemp = (pObj->fCompl0 ? ~fanin[0]->iTemp : fanin[0]->iTemp) & (pObj->fCompl1 ? ~fanin[1]->iTemp : fanin[1]->iTemp);
+    }
+
+    // output read
+    Abc_NtkForEachPo(pNtk, pPo, ithPo) {
+        Abc_Obj_t* fanin;
+        Abc_ObjForEachFanin(pPo, pFanin, ithFanin) {
+            fanin = pFanin;
+        }
+        pPo->iTemp = pPo->fCompl0 ? ~fanin->iTemp : fanin->iTemp;
+    }
+
+    return;
 }
 
 int Lsv_CommandSimAIG(Abc_Frame_t* pAbc, int argc, char** argv) {
